@@ -1,64 +1,113 @@
 package com.xuperiptv.utils
 
 import com.xuperiptv.data.Channel
-import java.io.BufferedReader
-import java.io.InputStream
-import java.io.InputStreamReader
+import java.util.UUID
 
+/**
+ * Parser para archivos M3U/M3U8
+ * Extrae información de canales IPTV
+ */
 object M3UParser {
 
     /**
-     * Parsea un InputStream M3U y devuelve la lista de canales.
+     * Parsea contenido M3U y retorna lista de canales
      */
-    fun parse(inputStream: InputStream): List<Channel> {
+    fun parse(content: String): List<Channel> {
         val channels = mutableListOf<Channel>()
-        val reader = BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8))
-
-        var currentName = ""
-        var currentLogo: String? = null
-        var currentGroup = "Sin grupo"
-        var currentTvgId: String? = null
-        var currentTvgName: String? = null
-
-        reader.forEachLine { rawLine ->
-            val line = rawLine.trim()
-            when {
-                line.startsWith("#EXTINF:") -> {
-                    // Extraer atributos
-                    currentTvgId    = extractAttr(line, "tvg-id")
-                    currentTvgName  = extractAttr(line, "tvg-name")
-                    currentLogo     = extractAttr(line, "tvg-logo")
-                    currentGroup    = extractAttr(line, "group-title") ?: "Sin grupo"
-                    // Nombre al final de la línea (después de la última coma)
-                    currentName     = line.substringAfterLast(",").trim()
+        val lines = content.split("\n")
+        
+        var currentInfo = mutableMapOf<String, String>()
+        var currentUrl = ""
+        
+        for (line in lines) {
+            val trimmedLine = line.trim()
+            
+            // Ignorar líneas vacías y comentarios
+            if (trimmedLine.isEmpty() || trimmedLine.startsWith("#EXTM3U")) {
+                continue
+            }
+            
+            // Procesar línea EXTINF
+            if (trimmedLine.startsWith("#EXTINF:")) {
+                currentInfo = parseExtinf(trimmedLine)
+            } 
+            // La siguiente línea no iniciada con # es la URL
+            else if (!trimmedLine.startsWith("#") && currentInfo.isNotEmpty()) {
+                currentUrl = trimmedLine
+                
+                val channel = Channel(
+                    id = UUID.randomUUID().toString(),
+                    name = currentInfo["name"] ?: "Desconocido",
+                    url = currentUrl,
+                    logo = currentInfo["logo"] ?: "",
+                    group = currentInfo["group"] ?: "Sin Categoría",
+                    epgId = currentInfo["epgId"] ?: ""
+                )
+                
+                if (channel.url.isNotEmpty()) {
+                    channels.add(channel)
                 }
-                line.isNotEmpty() && !line.startsWith("#") -> {
-                    if (currentName.isNotEmpty()) {
-                        channels.add(
-                            Channel(
-                                name      = currentName,
-                                url       = line,
-                                logo      = currentLogo,
-                                group     = currentGroup,
-                                tvgId     = currentTvgId,
-                                tvgName   = currentTvgName
-                            )
-                        )
-                    }
-                    // Reset
-                    currentName    = ""
-                    currentLogo    = null
-                    currentGroup   = "Sin grupo"
-                    currentTvgId   = null
-                    currentTvgName = null
-                }
+                
+                currentInfo.clear()
             }
         }
+        
         return channels
     }
-
-    private fun extractAttr(line: String, attr: String): String? {
-        val regex = Regex("""$attr="([^"]*?)"""")
-        return regex.find(line)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+    
+    /**
+     * Parsea línea EXTINF y extrae atributos
+     */
+    private fun parseExtinf(extinf: String): MutableMap<String, String> {
+        val info = mutableMapOf<String, String>()
+        
+        // Remover "#EXTINF:" del inicio
+        val content = extinf.removePrefix("#EXTINF:")
+        
+        // Dividir por coma: las propiedades están antes, el nombre después
+        val parts = content.split(",", limit = 2)
+        
+        if (parts.size == 2) {
+            val attributes = parts[0]
+            val name = parts[1].trim()
+            
+            info["name"] = name
+            
+            // Parsear atributos: tvg-id="..." tvg-name="..." tvg-logo="..." group-title="..."
+            parseAttributes(attributes, info)
+        }
+        
+        return info
+    }
+    
+    /**
+     * Extrae atributos de las propiedades EXTINF
+     */
+    private fun parseAttributes(attributes: String, info: MutableMap<String, String>) {
+        // tvg-id
+        var value = extractAttribute(attributes, "tvg-id")
+        if (value.isNotEmpty()) info["epgId"] = value
+        
+        // tvg-name
+        value = extractAttribute(attributes, "tvg-name")
+        if (value.isNotEmpty()) info["name"] = value
+        
+        // tvg-logo
+        value = extractAttribute(attributes, "tvg-logo")
+        if (value.isNotEmpty()) info["logo"] = value
+        
+        // group-title
+        value = extractAttribute(attributes, "group-title")
+        if (value.isNotEmpty()) info["group"] = value
+    }
+    
+    /**
+     * Extrae valor de un atributo
+     * Formato: atributo="valor"
+     */
+    private fun extractAttribute(text: String, attributeName: String): String {
+        val regex = Regex("""$attributeName\s*=\s*['\"]([^'\"]*)['\"]""")
+        val match = regex.find(text)
+        return match?.groupValues?.get(1) ?: ""
     }
 }
